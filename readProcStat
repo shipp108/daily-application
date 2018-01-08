@@ -1,0 +1,285 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <dirent.h>  
+
+#include <sys/types.h>
+
+
+struct proc_stat {
+	int 				pid;		// process id
+	char 				tcomm[16];	// filename of the executable
+	char 				state;		// state (R is running, S is sleeping, D is sleeping in an uninterruptible wait, Z is zombie, T is traced or stopped)
+	long long 			ppid;		// process id of the parent process
+	long long 			pgrp;		// pgrp of the process
+	long long 			sid;		// session id
+	long long 			tty_nr; 	// tty the process uses
+	long long 			tty_pgrp;	// pgrp of the tty
+	unsigned long long 	flags; 		// task flags
+	unsigned long long	min_flt;	// number of minor faults
+	unsigned long long	cmin_flt;	// number of minor faults with child's
+	unsigned long long	maj_flt;	// number of major faults
+	unsigned long long	cmaj_flt;	// number of major faults with child's
+	unsigned long long	utime;		// user mode jiffies
+	unsigned long long	stime;		// kernel mode jiffies
+	long long			cutime;		// user mode jiffies with child's
+	long long			cstime;		// kernel mode jiffies with child's
+	long long			priority;	// priority level
+	long long			nice;		// nice level
+	long long			num_threads;	// number of threads
+	unsigned long long	it_real_value; 	// (obsolete, always 0)
+	unsigned long long	start_time;		// time the process started after system boot
+	unsigned long long	vsize;		// virtual memory size
+	unsigned long long	rss;		// resident set memory size
+	unsigned long long	rsslim;		// current limit in bytes on the rss
+	unsigned long long	start_code;	// address above which program text can run
+	unsigned long long	end_code;	// address below which program text can run
+	unsigned long long	start_stack;// address of the start of the main process stack
+	unsigned long long	esp;		// current value of ESP
+	unsigned long long	eip;		// current value of EIP
+	unsigned long long	pending;	// bitmap of pending signals
+	unsigned long long	blocked;	// bitmap of blocked signals
+	unsigned long long	sigign;		// bitmap of ignored signals
+	unsigned long long	sigcatch;	// bitmap of catched signals
+	unsigned long long	wchan;		// address where process went to sleep
+	unsigned long long	place_holder0;
+	unsigned long long	place_holder1;
+	long long			exit_signal;// signal to send to parent thread on exit
+	long long			task_cpu;	// which CPU the task is scheduled on
+	unsigned long long	rt_priority;// realtime priority
+	unsigned long long	policy;		// scheduling policy (man sched_setscheduler)
+	unsigned long long	blkio_ticks;// time spent waiting for block IO
+	unsigned long long	gtime;		// guest time of the task in jiffies
+	long long			cgtime; 	// guest time of the task children in jiffies
+	unsigned long long 	start_data;	// address above which program data+bss is placed
+	unsigned long long 	end_data;	// address below which program data+bss is placed
+	unsigned long long	start_brk;	// address above which program heap can be expanded with brk(
+	unsigned long long	arg_start;	// address above which program command line is placed
+	unsigned long long	arg_end;	// address below which program command line is placed
+	unsigned long long	env_start;	// address above which program environment is placed
+	unsigned long long	env_end;	// address below which program environment is placed
+	long long 			exit_code;	// the thread's exit_code in the form reported by the waitpid system call
+};
+
+pid_t getProcessPidbyName(char *name)
+{
+    FILE *fptr;
+    char buf[255];
+    char cmd[255] = {'\0'};
+    pid_t pid = -1;
+    sprintf(cmd,"pidof %s",name);
+    if((fptr = popen(cmd,"r")) != NULL) {
+        if(fgets(buf,255,fptr) != NULL) {
+            pid = atoi(buf);
+            //printf("pid = %d\n",pid);
+        }
+    }
+    pclose(fptr);
+    return pid;
+}
+
+static char *nexttok(char **strp)
+{
+    char *p = strsep(strp, " ");
+    return (p == 0) ? "" : p;
+}
+
+void showProcStat(struct proc_stat *pStat)
+{
+	if (pStat != NULL) {
+		printf("------------------------------\n");
+		printf("info 	: %d (%s) %c\n", pStat->pid, pStat->tcomm, pStat->state);
+		
+		printf("utime	: %llu\n", pStat->utime);
+		printf("stime	: %llu\n", pStat->stime);
+		printf("cutime	: %lld\n", pStat->cutime);
+		printf("cstime	: %lld\n", pStat->cstime);
+		
+		//printf("threads	: %lld\n", pStat->num_threads);
+		printf("vsize	: %lf (KB)\n", pStat->vsize  / 1024.0);
+		printf("rss 	: %llu (page)\n", pStat->rss);
+		printf("rsslim	: %lf (KB)\n", pStat->rsslim / 1024.0);
+		
+		//printf("exit_sig: %lld\n", pStat->exit_signal);
+		//printf("task_cpu: %lld\n", pStat->task_cpu);
+		//printf("rt_prio : %llu\n" , pStat->rt_priority);
+		//printf("policy	: %llu\n", pStat->policy);
+		//printf("exit_code:%lld\n", pStat->exit_code);
+	}
+}
+
+static int ps_line(int pid, int tid, struct proc_stat *pStat)
+{
+    char statline[1024];
+    int fd, r;
+    char *ptr;
+
+	if (pStat == NULL) {
+		return;
+	}
+
+    sprintf(statline, "/proc/%d", pid);
+
+    if(tid) {
+        sprintf(statline, "/proc/%d/task/%d/stat", pid, tid);
+    } else {
+        sprintf(statline, "/proc/%d/stat", pid);
+    }
+
+    fd = open(statline, O_RDONLY);
+    if(fd <= 0) {
+        return -1;
+    }
+    r = read(fd, statline, 1023);
+ 	close(fd);
+ 	
+    if(r < 0) {
+        return -1;
+    }
+
+    ptr = statline;
+    pStat->pid = atoi(nexttok(&ptr));
+    ptr++;          // skip "("
+
+	for (r = 0; *ptr != ')' && r < 16; r++) {
+		pStat->tcomm[r] = *ptr++;
+	}
+	pStat->tcomm[r] = '\0';
+    ptr = strrchr(ptr, ')'); // Skip to *last* occurence of ')',
+    ptr++;          // skip ")"
+    ptr++;			// skip " "
+    
+    char *tmp 		= nexttok(&ptr);
+	pStat->state 	= *tmp;
+	pStat->ppid 	= strtoll(nexttok(&ptr), 0, 10);
+    pStat->pgrp 	= strtoll(nexttok(&ptr), 0, 10); // pgrp
+    pStat->sid 		= strtoll(nexttok(&ptr), 0, 10); // sid
+    pStat->tty_nr 	= strtoll(nexttok(&ptr), 0, 10);
+    pStat->tty_pgrp = strtoll(nexttok(&ptr), 0, 10); // tpgid
+    
+    pStat->flags 	= strtoul(nexttok(&ptr), 0, 10); // flags
+    pStat->min_flt 	= strtoul(nexttok(&ptr), 0, 10); // minflt
+    pStat->cmin_flt = strtoul(nexttok(&ptr), 0, 10); // cminflt
+    pStat->maj_flt 	= strtoul(nexttok(&ptr), 0, 10); // majflt
+    pStat->cmaj_flt = strtoul(nexttok(&ptr), 0, 10); // cmajflt
+    pStat->utime 	= strtoul(nexttok(&ptr), 0, 10);
+    pStat->stime 	= strtoul(nexttok(&ptr), 0, 10);
+    
+    pStat->cutime 		= strtoll(nexttok(&ptr), 0, 10); // cutime
+    pStat->cstime 		= strtoll(nexttok(&ptr), 0, 10); // cstime
+    pStat->priority 	= strtoll(nexttok(&ptr), 0, 10);
+    pStat->nice 		= strtoll(nexttok(&ptr), 0, 10);
+    pStat->num_threads 	= strtoll(nexttok(&ptr), 0, 10); // threads
+    
+    pStat->it_real_value= strtoul(nexttok(&ptr), 0, 10); // itrealvalue
+    pStat->start_time 	= strtoul(nexttok(&ptr), 0, 10); // starttime
+    pStat->vsize 		= strtoul(nexttok(&ptr), 0, 10); // vsize
+    pStat->rss 			= strtoul(nexttok(&ptr), 0, 10); // rss
+    pStat->rsslim 		= strtoul(nexttok(&ptr), 0, 10); // rlim
+    pStat->start_code 	= strtoul(nexttok(&ptr), 0, 10); // startcode
+    pStat->end_code 	= strtoul(nexttok(&ptr), 0, 10); // endcode
+    pStat->start_stack 	= strtoul(nexttok(&ptr), 0, 10); // startstack
+    pStat->esp 			= strtoul(nexttok(&ptr), 0, 10); // kstkesp
+    pStat->eip 			= strtoul(nexttok(&ptr), 0, 10); // kstkeip
+    pStat->pending 		= strtoul(nexttok(&ptr), 0, 10); // signal
+    pStat->blocked 		= strtoul(nexttok(&ptr), 0, 10); // blocked
+    pStat->sigign 		= strtoul(nexttok(&ptr), 0, 10); // sigignore
+    pStat->sigcatch 	= strtoul(nexttok(&ptr), 0, 10); // sigcatch
+    pStat->wchan 		= strtoul(nexttok(&ptr), 0, 10); // wchan
+    pStat->place_holder0= strtoul(nexttok(&ptr), 0, 10); // nswap
+    pStat->place_holder1= strtoul(nexttok(&ptr), 0, 10); // cnswap
+    
+    pStat->exit_signal 	= strtoll(nexttok(&ptr), 0, 10); // exit signal
+    pStat->task_cpu 	= strtoll(nexttok(&ptr), 0, 10); // processor
+    
+    pStat->rt_priority 	= strtoul(nexttok(&ptr), 0, 10); // rt_priority
+    pStat->policy	 	= strtoul(nexttok(&ptr), 0, 10); // scheduling policy
+    pStat->blkio_ticks	= strtoul(nexttok(&ptr), 0, 10);
+	pStat->gtime	 	= strtoul(nexttok(&ptr), 0, 10);
+	
+	pStat->cgtime	 	= strtoll(nexttok(&ptr), 0, 10);
+	
+	pStat->start_data	= strtoul(nexttok(&ptr), 0, 10);
+	pStat->end_data	 	= strtoul(nexttok(&ptr), 0, 10);
+	pStat->start_brk	= strtoul(nexttok(&ptr), 0, 10);
+	pStat->arg_start	= strtoul(nexttok(&ptr), 0, 10);
+	pStat->arg_end	 	= strtoul(nexttok(&ptr), 0, 10);
+	pStat->env_start	= strtoul(nexttok(&ptr), 0, 10);
+	pStat->env_end	 	= strtoul(nexttok(&ptr), 0, 10);
+	pStat->exit_code	= strtoll(nexttok(&ptr), 0, 10);
+	
+	showProcStat(pStat);
+	
+    return 0;
+}
+
+
+void ps_threads(int pid)
+{
+    char tmp[128];
+    DIR *d;
+    struct dirent *de;
+
+    sprintf(tmp,"/proc/%d/task",pid);
+    d = opendir(tmp);
+    if(d == 0) {
+    	return;
+   	}
+
+    while((de = readdir(d)) != 0) {
+        if(isdigit(de->d_name[0])) {
+            int tid = atoi(de->d_name);
+            if(tid == pid) {
+            	continue;
+            }
+            struct proc_stat stat;
+            ps_line(pid, tid, &stat);
+        }
+    }
+    closedir(d);
+}
+
+int readProc(int pidfilter)
+{
+	int ret = 1;
+    struct dirent *de;
+    DIR *d = opendir("/proc");
+    if (d == 0) {
+        printf("open /proc failed\n");
+        return -1;
+    }
+    
+    while((de = readdir(d)) != 0) {
+        if(isdigit(de->d_name[0])) {
+            int pid = atoi(de->d_name);
+            if(!pidfilter || (pidfilter == pid)) {
+            	ret = 0;
+            	struct proc_stat stat;
+                ps_line(pid, 0, &stat);
+                ps_threads(pid);
+            }
+        }
+    }
+    closedir(d);
+    return ret;
+}
+
+int main()
+{
+	char app[] = "p_test";
+    pid_t pid = getProcessPidbyName(app);
+    
+    int cnt = 0;
+    while(1) {
+    	printf("\n***************** [%d] *****************\n\n", cnt++);
+    	if(readProc(pid)) {
+    		printf("application (%s) not exist\n", app);
+    		break;
+    	}
+    	sleep(1);
+    }
+    return 0;
+}
+
